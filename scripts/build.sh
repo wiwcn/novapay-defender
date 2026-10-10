@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
 # ============================================================
 # NovaPay Defender — Local reproducible build script
-# 在本地复现 CI 流水线，生成 novapay-server 可执行文件。
+# Generates `novapay-server` (~117 MB) standalone executable.
 #
-# 使用前提:
-#   - Node.js >= 22 (https://nodejs.org)
-#   - npm 自带
+# Prerequisites:
+#   - Node.js >= 22
+#   - npm (bundled with Node.js)
 #
-# 使用方法:
+# Usage:
 #   ./scripts/build.sh
 #
-# 产物:
-#   ./novapay-server  (约 117 MB)
+# Output:
+#   ./novapay-server
 # ============================================================
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "=== [1/5] Installing build tools ==="
+echo "=== [1/5] Install build tools ==="
 npm install -g esbuild postject 2>/dev/null || {
-  echo "无法全局安装 esbuild/postject，尝试本地安装..."
-  npm install esbuild postject
+  echo "Trying local install..."
+  npm install --no-save esbuild postject
   export PATH="$PWD/node_modules/.bin:$PATH"
 }
 
-echo "=== [2/5] Bundling source ==="
+echo "=== [2/5] Bundle source ==="
 esbuild src/server.js \
   --bundle --platform=node --format=cjs \
   --outfile=server.bundle.js \
@@ -37,10 +37,10 @@ esbuild src/server.js \
   --external:node:url \
   --external:node:sea
 
-echo "=== [3/5] Generating SEA preparation blob ==="
+echo "=== [3/5] Generate SEA preparation blob ==="
 node --experimental-sea-config sea-config.json
 
-echo "=== [4/5] Constructing standalone binary ==="
+echo "=== [4/5] Construct standalone binary ==="
 NODE_BIN="$(which node)"
 cp "$NODE_BIN" novapay-server
 postject novapay-server NODE_SEA_BLOB sea-prep.blob \
@@ -48,22 +48,28 @@ postject novapay-server NODE_SEA_BLOB sea-prep.blob \
 chmod +x novapay-server
 
 echo "=== [5/5] Sanity check ==="
-PORT=19876 ./novapay-server &
+PORT=19876 ./novapay-server > /tmp/novapay-smoke.log 2>&1 &
 SERVER_PID=$!
 sleep 3
-HEALTH=$(curl -sf http://localhost:19876/health || echo 'FAIL')
-kill $SERVER_PID 2>/dev/null || true
 
-if echo "$HEALTH" | grep -q '"status":"ok"'; then
-  echo "健康检查通过 ✓"
+if curl -sf http://localhost:19876/health | grep -q '"status":"ok"'; then
+  echo "Health check passed ✓"
 else
-  echo "健康检查失败: $HEALTH"
+  echo "Health check failed:"
+  cat /tmp/novapay-smoke.log
+  kill $SERVER_PID 2>/dev/null || true
   exit 1
 fi
 
+kill $SERVER_PID 2>/dev/null || true
 SIZE=$(du -h novapay-server | cut -f1)
-echo ""
-echo "=== Build complete ==="
-echo "Binary: novapay-server ($SIZE)"
-echo ""
-echo "Run with: PORT=8080 ./novapay-server"
+
+cat << DONE
+
+=== Build complete ===
+
+Binary:  novapay-server ($SIZE)
+Run:     PORT=8080 ./novapay-server
+Health:  curl http://localhost:8080/health
+
+DONE
