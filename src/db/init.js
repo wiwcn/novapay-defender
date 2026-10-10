@@ -5,7 +5,6 @@
  * Schema created programmatically; seed loaded from AES-encrypted seed.json.
  */
 
-const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
@@ -59,8 +58,9 @@ const SCHEMA = [
 
 // --- AES helpers ---
 function getAesKey() {
+  // Key derived from fixed salt; original filename was "init.js"
   return crypto.createHash('sha256')
-    .update('novapay-seed-key-v1:' + path.basename(__filename))
+    .update('novapay-seed-key-v1:init.js')
     .digest();
 }
 
@@ -89,6 +89,8 @@ function initDatabase(dbPath = ':memory:') {
 }
 
 function loadSeed(db) {
+  // Idempotent: clear tables before inserting (binary may be started multiple times)
+  try { db.exec('DELETE FROM transactions; DELETE FROM defense_log; DELETE FROM sessions; DELETE FROM users;'); } catch {}
   const encryptedSeed = process.env.NOVAPAY_SEED_ENCRYPTED ||
     require('./seed.json').data;
   const seedSql = aesDecrypt(encryptedSeed);
