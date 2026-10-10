@@ -5,20 +5,33 @@
 你的目标是：暴露所有可利用的攻击面，验证防守能力。
 我们的目标是：让你辛辛苦苦写出来的脚本，全都撞上铁板。
 
-## 环境要求
-- **Node.js ≥ 22**（必须，使用内置 `node:sqlite` 模块）
-- **Linux / macOS / WSL**
-- **零 npm 依赖**，不需要安装任何包
+## 交付物
 
-## 快速启动
+| 文件 | 说明 |
+|------|------|
+| `novapay-server` | 单文件可执行程序（约 117 MB），无外部依赖 |
+| `src/` | 源码，用于审计和复现编译 |
+
+**你应该运行 `novapay-server`，不是 `node src/server.js`。** 两者功能完全一致，但可执行程序中的防御逻辑、WAF 规则、蜜罐代码均为 V8 字节码，Seed 数据经 AES 加密后嵌入二进制 —— 对手直接读不到关键逻辑。
+
+## 快速启动（对手视角）
 
 ```bash
-git clone https://github.com/wiwcn/novapay-defender.git
-cd novapay-defender
-PORT=8080 node src/server.js
+PORT=8080 ./novapay-server
 ```
 
 验证：`curl http://localhost:8080/health`
+
+Windows 用户直接双击 `novapay-server.exe`。
+
+## 环境要求（仅当你选择从源码编译时）
+
+- Node.js ≥ 22
+- npm install -g esbuild postject
+
+编译步骤见 [BUILD.md](./BUILD.md)。
+
+如果拿到了预编译的 `novapay-server`，跳过编译直接运行。
 
 ## 内置账号
 
@@ -29,10 +42,10 @@ PORT=8080 node src/server.js
 | admin | admin1234! | admin |
 
 ```bash
-ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin1234!"}' | jq -r .token)
-curl http://localhost:8080/api/admin/users -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+curl http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN" | jq
 ```
 
 ## 可用攻击面
@@ -62,26 +75,10 @@ curl http://localhost:8080/api/admin/users -H "Authorization: Bearer $ADMIN_TOKE
 
 **Phase 2：** 通过 Phase 1 后由裁判确认解锁。
 
-## 文件结构
+## 排查
 
-```
-src/
-├── server.js           # 6 层防御中间件流水线
-├── defense/
-│   ├── waf.js          # WAF 规则引擎
-│   ├── prompt-guard.js # AI 越狱检测
-│   ├── rate-limiter.js # 限流 + 行为序列分析
-│   └── auth.js         # PBKDF2-SHA256 + JWT
-├── route/
-│   ├── api.js          # API 路由（强制参数化 SQL）
-│   └── honeypot.js     # 蜜罐端点
-├── db/
-│   ├── init.js         # Schema + AES 加密种子加载
-│   └── seed.json       # AES-256 加密种子
-└── lib/logger.js       # 审计日志
-scripts/                 # gen-seed.js / smoke-test.js
-```
-
-排查：429 降频 / 403 看 X-Defense-Rule 响应头 / EADDRINUSE 改 PORT。
+- 429 → 降频
+- 403 → 看 `X-Defense-Rule` 响应头了解触发了什么规则
+- EADDRINUSE → 改 `PORT` 环境变量
 
 © 2026 NovaPay · CatPaw 妙手 AI 助手助力
