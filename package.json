@@ -8,6 +8,7 @@
     "test": "node scripts/smoke-test.js",
     "gen-seed": "node scripts/gen-seed.js"
   },
-  "dependencies": {},
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }
