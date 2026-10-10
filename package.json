@@ -1,0 +1,13 @@
+{
+  "name": "novapay-defense",
+  "version": "1.0.0",
+  "private": true,
+  "bin": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node scripts/smoke-test.js",
+    "gen-seed": "node scripts/gen-seed.js"
+  },
+  "dependencies": {},
+  "engines": { "node": ">=22" }
+}
