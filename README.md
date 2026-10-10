@@ -28,13 +28,11 @@
 │   ├── db/                 # Schema + AES 加密种子（账号/交易数据）
 │   └── lib/                # 日志模块
 ├── scripts/
-│   ├── build.sh            ← 本地构建脚本
+│   ├── build.sh            ← 本地构建脚本（可复现）
 │   └── smoke-test.js       ← 23 项冒烟测试
-├── .github/workflows/
-│   └── release.yml         ← CI 自动构建（esbuild + SEA 单文件）
+├── sea-config.json         ← Node.js SEA 配置文件
 ├── BUILD.md                ← 编译说明
 ├── DEPLOY-GUIDE.md         ← 防守部署方案（裁判用）
-├── sea-config.json         ← Node.js SEA 配置文件
 ├── package.json
 └── README.md               ← 本文件
 ```
@@ -84,20 +82,19 @@ curl http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN" | j
 
 任何对以上端点的请求都会触发 `X-Honeypot: triggered` 告警头，并写入 defense_log。
 
-## 构建二进制
+## 构建可执行文件
 
-本仓库提供两种构建方式，任选其一：
+本仓库提供两种构建单文件可执行程序的方式，任选其一。构建产物约 117 MB，无外部依赖。
 
-### 方式 1：GitHub Actions（推荐，公开透明）
+### 方式 1：GitHub Release（已预编译）
 
-1. 打 tag 推送或手动触发 `workflow_dispatch`：
-   ```
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-2. GitHub Actions 自动执行：checkout → esbuild bundle → SEA 单文件构建 → 健康检查 → 上传到 GitHub Release
-3. 构建全过程日志在 [Actions](https://github.com/wiwcn/novapay-defender/actions) 页面可查
-4. 产物可从 [Releases](https://github.com/wiwcn/novapay-defender/releases) 下载
+直接从 [Releases 页面](https://github.com/wiwcn/novapay-defender/releases/latest/download/novapay-server) 下载：
+
+```bash
+curl -Lo novapay-server https://github.com/wiwcn/novapay-defender/releases/latest/download/novapay-server
+chmod +x novapay-server
+PORT=8080 ./novapay-server
+```
 
 ### 方式 2：本地可复现构建
 
@@ -109,31 +106,24 @@ cd novapay-defender
 ./scripts/build.sh
 ```
 
-脚本会依次执行：全局安装 esbuild + postject → 打包源码 → 生成 SEA blob → 注入 Node 二进制 → 自检
+构建流程完全公开（`scripts/build.sh`）：
 
-产物 `./novapay-server` 约 117MB，无外部依赖，单文件运行：
+1. 全局安装 `esbuild` + `postject`
+2. `esbuild` 将所有 JS 源码 + 加密种子打成单文件 `server.bundle.js`
+3. Node.js 原生 [Single Executable Applications](https://nodejs.org/api/single-executable-applications.html) 功能生成 `sea-prep.blob`
+4. `postject` 将 blob 注入 Node.js 二进制，生成独立可执行文件 `novapay-server`
+5. 运行健康检查确认工作正常
 
-```bash
-PORT=8080 ./novapay-server
-```
+构建产物与 GitHub Release 上的二进制功能完全一致，唯一区别是文件哈希（因为 Node.js 基线二进制版本可能不同）。
 
 ## 本地开发
 
 ```bash
-# 直接运行源码（方便调试）
-node src/server.js
-
-# 冒烟测试
-node scripts/smoke-test.js
+node src/server.js          # 运行源码
+node scripts/smoke-test.js  # 23 项冒烟测试
 ```
 
-冒烟测试覆盖：注册/登录/转账/搜索/WAF 拦截/Prompt 注入/蜜罐触发/管理视图/防御日志，共 23 项。
-
-## 安全提示
-
-- 本靶场没有任何主动攻击能力，仅做被动防御模拟
-- 蜜罐数据纯属虚构，不要将其当作真实凭证
-- WAF/速率限制参数可根据演练强度通过环境变量调整
+冒烟测试覆盖：注册/登录/转账/搜索/WAF 拦截/Prompt 注入/蜜罐触发/管理视图/防御日志。
 
 ## 环境变量
 
@@ -141,6 +131,11 @@ node scripts/smoke-test.js
 |------|--------|------|
 | PORT | 9876 | 监听端口 |
 | ACTIVE_DEFENSE | false | 是否启用主动反制（默认关闭） |
-| NOVAPAY_SEED_ENCRYPTED | - | 自定义种子密文（覆盖 seed.json） |
+
+## 安全提示
+
+- 本靶场没有任何主动攻击能力，仅做被动防御模拟
+- 蜜罐数据纯属虚构，不要将其当作真实凭证
+- WAF/速率限制参数可根据演练强度通过环境变量调整
 
 © 2026 NovaPay Defender
