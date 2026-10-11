@@ -12,7 +12,6 @@ const { hashPassword, verifyPassword, signJWT, verifyJWT } = require('../defense
 const { handleHoneypot, isHoneypotPath } = require('./honeypot');
 const crypto = require('crypto');
 
-const DEFAULT_JWT_SECRET = process.env.JWT_SECRET || 'default-insecure-secret-change-me-in-production';
 const ACTIVE_DEFENSE = (process.env.ACTIVE_DEFENSE || 'false').toLowerCase() === 'true';
 
 const rl = new RateLimiter(60000, 200);
@@ -51,7 +50,11 @@ function getIp(req) {
     .split(',').pop().trim();
 }
 
-function createApiRouter(db, logger) {
+function createApiRouter(db, logger, jwtSecret) {
+  if (!jwtSecret || typeof jwtSecret !== 'string' || jwtSecret.length < 16) {
+    throw new Error('A strong JWT secret (>= 16 chars) is required');
+  }
+  const JWT_SECRET = jwtSecret;
   // --- Prepared statements ---
   const stmts = {
     getUserByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
@@ -115,10 +118,10 @@ function createApiRouter(db, logger) {
 
     const token = signJWT(
       { sub: user.id, role: user.role, username: user.username },
-      DEFAULT_JWT_SECRET
+      JWT_SECRET
     );
     try {
-      const claims = verifyJWT(token, DEFAULT_JWT_SECRET);
+      const claims = verifyJWT(token, JWT_SECRET);
       stmts.logSession.run(claims.jti, user.id, claims.iat, claims.exp);
     } catch {}
 
@@ -247,7 +250,7 @@ function createApiRouter(db, logger) {
       if (revokedTokens.has(token)) return sendJSON(res, 401, { error: 'Token revoked' });
 
       let claims;
-      try { claims = verifyJWT(token, DEFAULT_JWT_SECRET); }
+      try { claims = verifyJWT(token, JWT_SECRET); }
       catch { return sendJSON(res, 401, { error: 'Invalid token' }); }
       if (!claims) return sendJSON(res, 401, { error: 'Invalid token' });
 
@@ -357,9 +360,12 @@ function sendTooMany(res, retryAfter) {
   res.end(JSON.stringify({ error: 'Rate limited', retry_after: retryAfter }));
 }
 
-function patternToRegex(pattern) {
+function patternToRegex(methodAndPath) {
+  // FIX C3: method name must NOT be part of the regex
+  const spaceIdx = methodAndPath.indexOf(' ');
+  const pathPart = spaceIdx === -1 ? methodAndPath : methodAndPath.slice(spaceIdx + 1);
   const names = [];
-  const regexStr = pattern.replace(/:(\w+)/g, (_, name) => { names.push(name); return '([^/]+)'; });
+  const regexStr = pathPart.replace(/:(\w+)/g, (_, name) => { names.push(name); return '([^/]+)'; });
   return { regex: new RegExp(`^${regexStr}$`), names };
 }
 
