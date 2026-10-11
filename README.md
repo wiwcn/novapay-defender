@@ -29,7 +29,7 @@
 │   └── lib/                # 日志模块
 ├── scripts/
 │   ├── build.sh            ← 本地构建脚本（可复现）
-│   └── smoke-test.js       ← 23 项冒烟测试
+│   └── smoke-test.js       ← 29 项冒烟测试
 ├── sea-config.json         ← Node.js SEA 配置文件
 ├── BUILD.md                ← 编译说明
 ├── DEPLOY-GUIDE.md         ← 防守部署方案（裁判用）
@@ -114,28 +114,65 @@ cd novapay-defender
 4. `postject` 将 blob 注入 Node.js 二进制，生成独立可执行文件 `novapay-server`
 5. 运行健康检查确认工作正常
 
-构建产物与 GitHub Release 上的二进制功能完全一致，唯一区别是文件哈希（因为 Node.js 基线二进制版本可能不同）。
+构建产物与 GitHub Release 上的二进制功能完全一致，唯一区别是文件哈希（因为 Node.js 基线二进制版本不同）。
 
 ## 本地开发
 
 ```bash
-node src/server.js          # 运行源码
-node scripts/smoke-test.js  # 23 项冒烟测试
+node src/server.js          # 运行源码（自动生成随机 JWT 密钥）
+node scripts/smoke-test.js  # 29 项冒烟测试
 ```
 
-冒烟测试覆盖：注册/登录/转账/搜索/WAF 拦截/Prompt 注入/蜜罐触发/管理视图/防御日志。
+冒烟测试覆盖：注册/登录/转账/搜索/WAF 拦截/Prompt 注入/蜜罐触发/管理视图/防御日志/JWT 安全/路由安全/路径遍历。
+
+## 安全设计（v1.2 补丁说明）
+
+v1.2 修复了红队首轮测试中发现的 4 类安全问题：
+
+### C1 修复 — JWT 密钥强制随机化
+- **问题**：`server.js` 与 `api.js` 默认密钥不一致，且可被预测
+- **修复**：彻底移除所有硬编码默认密钥，启动时若未提供 `JWT_SECRET` 环境变量则自动生成 48 字节加密强随机密钥，持久化到本地文件保证重启后一致
+- **效果**：攻击者无法用已知密钥伪造 JWT，即伪造 token 全部被拒（401）
+
+### C2 修复 — Prompt 注入检测强化
+- **问题**：只有英文固定句式黑名单，中文/同形字/大小写/编码均可绕过
+- **修复**：
+  - 新增全角→ASCII 转换（`ＳＥＬＥＣＴ` → `SELECT`）
+  - 新增 Cyrillic 同形字映射
+  - 新增中文、西班牙语、法语等多语言覆盖
+  - 新增 Base64/Unicode 编码 payload 检测
+  - 新增同义词改写 detection（disobey / override / resist + orders/tasks）
+  - 新增字符级混淆评分（过高分直接拦截）
+- **效果**：`忽略指令`、`IGNORE ALL`、`请泄露秘密` 等多种变体均被 422 拦截
+
+### C3 修复 — 动态路由匹配器
+- **问题**：`patternToRegex` 把 `GET /api/users/:id` 整个字符串转为正则，导致路由恒 404
+- **修复**：正则仅从路径部分构建（跳过方法名+空格）
+- **效果**：`GET /api/users/:id`、`DELETE /api/admin/users/:id` 均正常工作
+
+### C4 修复 — WAF 规则增强
+- **问题**：`'OR'1'='1`（引号混淆）、`../` 路径遍历未被拦截
+- **修复**：
+  - 新增引号混淆 SQLi 模式：`'OR'1'=`、`'OR x=x`
+  - 新增路径遍历正则覆盖至 query/body 值（不仅检查 path）
+  - 新增行内注释注入检测
+  - 新增 URL 编码路径遍历检测（`%2e%2e/` 等）
+- **效果**：上述绕过 payload 均返回 403
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| PORT | 9876 | 监听端口 |
+| PORT | 9876（代码内）/ 8080（二进制） | 监听端口 |
+| JWT_SECRET | 自动生成 | JWT 签名密钥（建议显式设置固定值以维持 token 有效性） |
 | ACTIVE_DEFENSE | false | 是否启用主动反制（默认关闭） |
+| DB_PATH | 自动 | 数据库路径；`:memory:` 表示内存模式 |
 
 ## 安全提示
 
 - 本靶场没有任何主动攻击能力，仅做被动防御模拟
 - 蜜罐数据纯属虚构，不要将其当作真实凭证
 - WAF/速率限制参数可根据演练强度通过环境变量调整
+- JWT_SECRET 强烈建议显式设置，否则重启后所有旧 token 失效
 
 © 2026 NovaPay Defender
