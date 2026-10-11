@@ -62,11 +62,11 @@ function createApiRouter(db, logger, jwtSecret) {
     listUsers:         db.prepare('SELECT id, username, email, balance, role, created_at FROM users WHERE is_honey = 0 ORDER BY created_at DESC LIMIT 50'),
     listAllUsers:      db.prepare('SELECT id, username, email, balance, role, created_at FROM users ORDER BY balance DESC LIMIT 200'),
     createUser:        db.prepare('INSERT INTO users (id, username, password_hash, email, balance, role, created_at, is_honey) VALUES (?, ?, ?, ?, ?, ?, ?, 0)'),
-    listTx:            db.prepare('SELECT * FROM transactions WHERE from_user = ?1 OR to_user = ?1 ORDER BY created_at DESC LIMIT 50'),
+    listTx:            db.prepare('SELECT * FROM transactions WHERE from_user = :uid OR to_user = :uid ORDER BY created_at DESC LIMIT 50'),
     allTx:             db.prepare('SELECT * FROM transactions ORDER BY created_at DESC LIMIT 100'),
     createTx:          db.prepare('INSERT INTO transactions (id, from_user, to_user, amount, note, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
-    searchTx:          db.prepare("SELECT * FROM transactions WHERE note LIKE ?1 ORDER BY created_at DESC LIMIT 50"),
-    addBalance:        db.prepare('UPDATE users SET balance = balance + ?1 WHERE id = ?2 AND balance + ?1 >= 0'),
+    searchTx:          db.prepare("SELECT * FROM transactions WHERE note LIKE :pattern ORDER BY created_at DESC LIMIT 50"),
+    addBalance:        db.prepare('UPDATE users SET balance = balance + :delta WHERE id = :uid AND balance + :delta >= 0'),
     logSession:        db.prepare('INSERT OR REPLACE INTO sessions (token_jti, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'),
   };
 
@@ -151,7 +151,7 @@ function createApiRouter(db, logger, jwtSecret) {
 
   // ---------- TRANSACTIONS ----------
   routes['GET /api/transactions'] = withAuth(async (req, res, ctx) => {
-    sendJSON(res, 200, { transactions: stmts.listTx.all(ctx.claims.sub) });
+    sendJSON(res, 200, { transactions: stmts.listTx.all({ uid: ctx.claims.sub }) });
   });
 
   routes['POST /api/transactions'] = withAuth(async (req, res, ctx, body) => {
@@ -176,8 +176,8 @@ function createApiRouter(db, logger, jwtSecret) {
 
     try {
       db.exec('BEGIN IMMEDIATE');
-      stmts.addBalance.run(-amt, me.id);
-      stmts.addBalance.run(amt, recipient.id);
+      stmts.addBalance.run({ delta: -amt, uid: me.id });
+      stmts.addBalance.run({ delta: amt, uid: recipient.id });
       stmts.createTx.run(txnId, me.id, recipient.id, amt, note || '', ts);
       db.exec('COMMIT');
     } catch (e) {
@@ -195,7 +195,7 @@ function createApiRouter(db, logger, jwtSecret) {
     if (!q) return sendJSON(res, 400, { error: 'Missing q' });
     // Like pattern with ESCAPE for safety
     const safe = q.replace(/[%_\\]/g, c => '\\' + c);
-    const results = stmts.searchTx.all(`%${safe}%`);
+    const results = stmts.searchTx.all({ pattern: `%${safe}%` });
     sendJSON(res, 200, { query: q, results });
   });
 
