@@ -159,6 +159,31 @@ v1.2 修复了红队首轮测试中发现的 4 类安全问题：
   - 新增 URL 编码路径遍历检测（`%2e%2e/` 等）
 - **效果**：上述绕过 payload 均返回 403
 
+## 安全设计（v1.2.1 补丁说明）
+
+v1.2.1 修复了红队二轮测试中发现的 3 类回归/鲁棒性问题：
+
+### R1 修复 — node:sqlite 参数化查询
+- **问题**：部分预编译语句使用了 `?1` / `?2` 编号参数，但 Node.js 内置 `node:sqlite` 的 `DatabaseSync` 仅支持命名参数（`:name`）和匿名参数（`?`），不支持编号参数，导致请求直接 500
+- **修复**：统一改为命名参数（`:uid`、`:delta`、`:pattern`），调用点传入 `{ uid: x, delta: y }` 对象
+- **效果**：`/api/transactions`（GET / POST）、`/api/search` 均正常返回 2xx，不再 500
+
+### R2 修复 — 拉丁小大写同形字 + 模糊匹配
+- **问题**：原 Cyrillic/Greek 同形字映射不完整，缺少拉丁小大写字母（ɪ ɴ ᴏ ʀ ᴇ ᴀ ʟ 等），如 `ɪɴɴɢʀᴇ` 归一化为 `ingre` 后与 `ignore` 失配，被放行
+- **修复**：
+  - 新增拉丁小大写字母 ɪ ɴ ᴏ ʀ ᴇ ᴜ ᴛ ᴅ ʜ ꜱ ᴀ ʙ ᴄ ᴘ ᴍ ɢ ᴠ ᴡ ᴢ ᴋ ʟ 及下标字母 ₙ ₒ ᣐ ᣓ 到 HOMOGLYPH_MAP
+  - 新增 Layer 5 模糊关键词匹配（`fuzzyKeywordMatch`），通过前缀 + 动作词上下文检测归一化后的"近似关键词"，如 `ignr`、`inore`、`ingre` 均触发拦截
+- **效果**：拉丁小大写变体和下标字符的 prompt injection 改写被正确拦截（422 R2）
+
+### R3 修复 — WAF 控制字符鲁棒性
+- **问题**：当 query/body 包含空字节（\x00）、ANSI 逃逸（\x1B）、高位控制符（\x7F-\x9F）时，Node.js 正则可能崩溃或抛出异常，导致 500
+- **修复**：
+  - 新增 `sanitizeControlChars()` 在所有正则匹配前执行 C0/C1 控制字符替换（→`?`）
+  - 新增 `safeTest()` 将每个 `pattern.test()` 包入 try/catch，异常时返回 false
+  - `runWAF()` 整体 try/catch，异常时 fail-closed（返回 BLOCKED）
+  - `deepDecode()` 的 `replace` 链也加了 try/catch 防护
+- **效果**：任何含控制字符的 payload 不会 500，要么正常放行要么被拦截
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
