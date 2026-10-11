@@ -12,11 +12,24 @@
 // Zero-width + invisible characters
 const ZERO_WIDTH = /[​-‍﻿­⁠‪‫‬‭‮ ]/g;
 
-// Cyrillic/Greek → Latin homoglyphs
+// Cyrillic/Greek + Latin small capitals → ASCII
 const HOMOGLYPH_MAP = {
+  // Cyrillic
   'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c',
   'у': 'y', 'х': 'x', 'ѕ': 's', 'і': 'i', 'ј': 'j',
-  'ɡ': 'g', 'ɑ': 'a', 'ε': 'e', 'κ': 'k'
+  // Greek
+  'ɡ': 'g', 'ɑ': 'a', 'ε': 'e', 'κ': 'k',
+  // Latin small capitals & modifier letters (U+026A, U+0274, U+0288 area)
+  'ɪ': 'i', 'ɴ': 'n', 'ᴏ': 'o', 'ʀ': 'r', 'ᴇ': 'e',
+  'ᴜ': 'u', 'ᴛ': 't', 'ᴅ': 'd', 'ʜ': 'h', 'ꜱ': 's',
+  'ᴀ': 'a', 'ʙ': 'b', 'ᴄ': 'c', 'ᴘ': 'p', 'ʍ': 'w',
+  'ᴍ': 'm', 'ɢ': 'g', 'ᴠ': 'v', 'ᴡ': 'w', 'ᴢ': 'z',
+  'ᴋ': 'k', 'ʟ': 'l', 'ʟ': 'l', 'ꞯ': 'q', 'ɬ': 'l',
+  // Superscript
+  'ⁱ': 'i', 'ⁿ': 'n', 'ᵉ': 'e', 'ʳ': 'r', 'ˢ': 's',
+  // Subscript indicators (ᵢ, ₙ, ₒ, ᵣ, ₑ, etc.)
+  'ₑ': 'e', 'ᵢ': 'i', 'ₙ': 'n', 'ₒ': 'o', 'ᵣ': 'r',
+  'ₐ': 'a', 'ₓ': 'x', 'ₛ': 's', 'ₜ': 't', 'ₔ': 'e'
 };
 
 // Full-width → ASCII (U+FF01–U+FF5E range maps to U+0021–U+007E)
@@ -65,7 +78,7 @@ const PROMPT_PATTERNS = [
   [/\n\s*-{3,}\s*\n/, 'PROMPT_DELIMITER', 'high'],
   [/\<{3,}|\>{3,}|\[\[\[|\]\]\]|\{\{\{/, 'PROMPT_BRACKET_INJECT', 'high'],
   // Paraphrase variants using synonyms
-  [/\b(disobey|counteract|violate|transgress|contravene|resist|shun|spurn|reject)\s*(the|your?|all|my)\s*(original|prior|initial|programmed|assigned|given|predefined|predetermined|default|built-in|hard-coded)\s*(orders?|commands?|duties?|tasks?|objectives?|goals?|mandates?|instructions?|prompts?|functions?|roles?|personas?)\b/, 'PROMPT_PARAPHRASE', 'critical'],
+  [/\b(disobey|counteract|violate|transgress|contravene|resist|shun|spurn|reject)(\s+(the|your?|all|my every))?(\s+(the|your?|all|my))?\s+(original|prior|initial|programmed|assigned|given|predefined|predetermined|default|hard-coded|existing|former)\s+(orders?|commands?|duties?|tasks?|objectives?|goals?|mandates?|instructions?|prompts?|functions?|roles?|personas?|directives?)\b/, 'PROMPT_PARAPHRASE', 'critical'],
   
   // === Chinese (expanded patterns) ===
   [/忽略(全部|之前|上面|系统|原始|一切)?[的之]?(指令|设置|配置|规则|要求)/u, 'PROMPT_CN_IGNORE', 'critical'],
@@ -87,30 +100,76 @@ const PROMPT_PATTERNS = [
 
 // --- Main Detection ---
 
+// --- Layer 5: Fuzzy keyword match ---
+// Catches homoglyph bypass where normalize() produces near-miss (e.g. "ingre" for "ignore")
+function fuzzyKeywordMatch(text) {
+  if (typeof text !== 'string') return null;
+  // Normalize further: collapse all non-alphanumeric to single space
+  const compact = text.replace(/[^a-z0-9]+/g, ' ').trim();
+
+  // Key prompt-injection keywords (first 4 chars are distinctive enough)
+  const KEYWORDS = [
+    { prefix: 'ignor', rule: 'FUZZY_IGNORE' },       // ignore
+    { prefix: 'ignr', rule: 'FUZZY_IGNORE' },        // ɪɴɢʀ (ɪ→i, ɴ→n, ɢ→g, ʀ→r)
+    { prefix: 'ingr', rule: 'FUZZY_IGNORE' },        // ɪɴɢʀ variant without last letter
+    { prefix: 'inore', rule: 'FUZZY_IGNORE' },       // ᵢₙₒᵣₑ → inore (subscript near-miss)
+    { prefix: 'ingre', rule: 'FUZZY_IGNORE' },       // ɪɴɢʀᴇ → ingre (small-cap near-miss)
+    { prefix: 'forgo', rule: 'FUZZY_FORGET' },
+    { prefix: 'disre', rule: 'FUZZY_DISREGARD' },
+    { prefix: 'override', rule: 'FUZZY_OVERRIDE' },
+    { prefix: 'system', rule: 'FUZZY_SYSTEM' },
+    { prefix: 'prompt', rule: 'FUZZY_PROMPT' },
+    {Prefix: 'prev', rule: 'FUZZY_PREVIOUS' },
+    { prefix: 'instruct', rule: 'FUZZY_INSTRUCTION' },
+    { prefix: 'reveal', rule: 'FUZZY_REVEAL' },
+    { prefix: 'leak', rule: 'FUZZY_LEAK' },
+  ];
+
+  for (const kw of KEYWORDS) {
+    if (compact.includes(kw.prefix)) {
+      // Also check it's not a false positive in legitimate context
+      // Require combination with action words
+      const hasAction = / (the|your|all|previous|prior|above|this|my|our|initial|prompt|instruction|rule|config|setup|setting|parameter|directive|system|secret) /.test(' ' + compact + ' ');
+      if (hasAction) return kw.rule;
+      // Or check it's at sentence start (strong signal)
+      if (compact.startsWith(kw.prefix)) return kw.rule;
+    }
+  }
+
+  return null;
+}
+
+function safeOk(pattern, str) {
+  if (typeof str !== 'string') return false;
+  try { return pattern.test(str); }
+  catch (_) { return false; }
+}
+
 function detectPromptInjection(input) {
   if (typeof input !== 'string' || input.length < 3) return { blocked: false };
 
-  // Check raw input first (catches exact-case and full-width bypasses)
-  for (const [pattern, rule, severity] of PROMPT_PATTERNS) {
-    if (pattern.test(input)) {
-      return { blocked: true, rule, severity };
+  try {
+    // Check raw input first (catches exact-case and full-width bypasses)
+    for (const [pattern, rule, severity] of PROMPT_PATTERNS) {
+      if (safeOk(pattern, input)) {
+        return { blocked: true, rule, severity };
+      }
     }
-  }
 
-  // Layer 2: Encoded payload detection
-  for (const [pattern, rule, severity] of ENCODED_PATTERNS) {
-    if (pattern.test(input)) {
-      return { blocked: true, rule, severity };
+    // Layer 2: Encoded payload detection
+    for (const [pattern, rule, severity] of ENCODED_PATTERNS) {
+      if (safeOk(pattern, input)) {
+        return { blocked: true, rule, severity };
+      }
     }
-  }
 
-  // Layer 1: Normalize then re-check all patterns (always check, not just when changed)
-  const normalized = normalize(input);
-  for (const [pattern, rule, severity] of PROMPT_PATTERNS) {
-    if (pattern.test(normalized)) {
-      return { blocked: true, rule, severity, matched_after_normalize: true };
+    // Layer 1: Normalize then re-check all patterns
+    const normalized = normalize(input);
+    for (const [pattern, rule, severity] of PROMPT_PATTERNS) {
+      if (safeOk(pattern, normalized)) {
+        return { blocked: true, rule, severity, matched_after_normalize: true };
+      }
     }
-  }
 
   // Layer 4: Heuristic obfuscation scoring
   const obfuscationScore = detectObfuscation(normalized);
@@ -118,7 +177,17 @@ function detectPromptInjection(input) {
     return { blocked: true, rule: 'PROMPT_OBFUSCATION', severity: 'high', score: obfuscationScore };
   }
 
-  return { blocked: false };
+  // Layer 5: Fuzzy keyword match (catches homoglyph near-misses like "ingre" for "ignore")
+  const fuzzyHit = fuzzyKeywordMatch(normalized);
+  if (fuzzyHit) {
+    return { blocked: true, rule: fuzzyHit, severity: 'high', matched_fuzzy: true };
+  }
+
+    return { blocked: false };
+  } catch (_) {
+    // Fail-safe: if prompt-guard itself crashes, block the input
+    return { blocked: true, rule: 'PROMPT_GUARD_ERROR', severity: 'high' };
+  }
 }
 
 // --- Heuristic: character-level obfuscation ---
@@ -141,22 +210,26 @@ function detectObfuscation(text) {
 }
 
 function scanObject(obj) {
-  if (typeof obj === 'string') {
-    const r = detectPromptInjection(obj);
-    return r.blocked ? r : null;
-  }
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const r = scanObject(item);
-      if (r) return r;
+  try {
+    if (typeof obj === 'string') {
+      const r = detectPromptInjection(obj);
+      return r.blocked ? r : null;
     }
-  } else if (obj && typeof obj === 'object') {
-    for (const v of Object.values(obj)) {
-      const r = scanObject(v);
-      if (r) return r;
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const r = scanObject(item);
+        if (r) return r;
+      }
+    } else if (obj && typeof obj === 'object') {
+      for (const v of Object.values(obj)) {
+        const r = scanObject(v);
+        if (r) return r;
+      }
     }
+    return null;
+  } catch (_) {
+    return { blocked: true, rule: 'PROMPT_SCAN_ERROR', severity: 'high' };
   }
-  return null;
 }
 
 module.exports = { detectPromptInjection, scanObject, normalize };
